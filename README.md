@@ -28,7 +28,7 @@ Installation
 
     bash
 
-git clone https://github.com/yourusername/planespotter.git
+git clone https://github.com/mkeay/planespotter.git
 cd planespotter
 
 Install Dependencies Install the necessary Python packages:
