@@ -181,7 +181,12 @@ def check_for_update(irc, icao, original_data):
                     (ground_speed != "N/A" and original_data.get("gs", "N/A") == "N/A")):
 
                     # Build the update message
-                    altitude = int("".join(filter(str.isdigit, str(aircraft.get("alt_baro", "0")))))
+                    raw_alt = str(aircraft.get("alt_baro", "0"))
+                    digits = "".join(filter(str.isdigit, raw_alt))
+                    if not digits and raw_alt.lower() not in ("0", "none"):
+                        print(f"[WARN] alt_baro value '{raw_alt}' produced no digits — defaulting to 0")
+                    altitude = int(digits) if digits else 0
+
                     category = aircraft.get("category")
                     emergency = aircraft.get("emergency")
                     squawk = aircraft.get("squawk")
