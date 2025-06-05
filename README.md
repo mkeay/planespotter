@@ -1,93 +1,113 @@
-Planespotter - Real-Time Aircraft Tracking and Alert System
-Project Description
+# ✈️ Planespotter
 
-Planespotter is a Python-based tool designed for real-time aircraft tracking, notification, and alerting. Running on a Raspberry Pi, this project connects to an ADS-B data source (e.g., ADSBexchange or Tar1090) and monitors local air traffic. The system sends alerts to an IRC channel with information on aircraft that meet specified watchlist criteria, including altitude, squawk codes, and speed. Each alert message includes flight details, distance, directional bearing, estimated time of arrival (ETA), and speed metrics. The project can also send alerts to a specified web API endpoint, making it suitable for aviation enthusiasts, planespotters, and those interested in monitoring airspace activity.
-Features
+**Planespotter** is a Python-based real-time aircraft tracking and alerting system designed to run on a Raspberry Pi. It connects to ADS-B data sources like [ADSBexchange](https://www.adsbexchange.com/) or [Tar1090](https://github.com/wiedehopf/tar1090) to monitor local air traffic. The system sends alerts to an IRC channel and/or a specified web API endpoint when aircraft meet defined watchlist criteria.
 
-    Real-Time Aircraft Monitoring: Connects to ADS-B data to track aircraft in real-time.
-    Customizable Watchlist Criteria: Set criteria based on squawk codes, altitude, aircraft categories, and emergency status.
-    IRC Alerts with Enhanced Formatting: Sends formatted alerts to an IRC channel with color codes for easy readability.
-    Distance, Direction, and ETA Calculations: Displays distance, directional bearing, and ETA based on ground speed.
-    Speed Information: Shows ground speed, indicated airspeed, and true airspeed if available.
-    Web API Integration: Optionally send alerts to a web API endpoint via HTTP POST.
-    Extensibility: Easy to modify for additional notification channels or criteria adjustments.
+---
 
-Getting Started
-Prerequisites
+## 🔧 Features
 
-    A Raspberry Pi or compatible Linux system
-    Python 3.x
-    Internet connection
-    Access to an ADS-B data source (e.g., ADSBexchange or Tar1090)
-    An IRC account and access to an IRC server
-    Optionally, a web API endpoint for additional alert notifications
+- **Real-Time Monitoring**: Continuously tracks aircraft using local ADS-B feeds.
+- **Customizable Alerts**: Define triggers based on altitude, speed, squawk codes, ICAO hex, callsigns, and more.
+- **IRC Notifications**: Sends structured alerts to your configured IRC server/channel.
+- **API Integration**: Optionally posts alert data to a specified webhook.
+- **Redundancy Handling**: Suppresses incomplete alerts and updates when more complete data is available.
 
-Installation
+---
 
-    Clone the Repository
+## 🛠️ Installation
 
-    bash
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/mkeay/planespotter.git
+   cd planespotter
+   ```
 
-git clone https://github.com/mkeay/planespotter.git
-cd planespotter
+2. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-Install Dependencies Install the necessary Python packages:
+3. **Configure Settings**
+   - Rename `config.txt.example` to `config.txt`
+   - Edit the configuration to match your IRC server, watchlist preferences, and webhook (if needed)
 
-bash
+4. **Run the Spotter**
+   ```bash
+   python spotter.py
+   ```
 
-pip install requests
+---
 
-Configure the Script Open the Python script and configure the following sections:
+## ⚙️ Configuration (`config.txt`)
 
-    IRC Server Details: Set your IRC server, channel, and bot nickname.
-    Reference Location: Enter your latitude and longitude for accurate distance and direction calculations.
-    ADSBexchange/Tar1090 URL: Set the URL for your ADS-B data source.
-    Web API Endpoint: Specify the URL for receiving alert messages as HTTP POST requests (optional).
+Planespotter uses a single `[default]` section in its `config.txt` for all settings.
 
-Run the Script
+### Example:
+```ini
+[default]
+# IRC settings
+irc_host = irc.example.net
+irc_port = 6697
+irc_channel = #planes
+irc_nick = spotterbot
+irc_tls = true
 
-bash
+# JSON API settings
+api_url = http://localhost:8080/data.json
 
-    python planespotter.py
+# Watchlist criteria
+altitude_below = 10000
+speed_above = 300
+squawks = 7500,7600,7700
+callsigns = RRR,RRR123
+icaos = 43C5AB,43C123
 
-The bot will start connecting to the ADS-B data source, monitoring aircraft, and sending alerts to your IRC channel and, if configured, to your web API endpoint.
-Configuration Options
-Watchlist Criteria
+# Location for distance/direction calculation
+lat = 55.9533
+lon = -3.1883
 
-Edit the following variables in the script to adjust the aircraft monitoring criteria:
+# Optional: POST alert JSON to this URL
+alert_webhook = https://your.webhook.url/receive
+```
 
-    Squawk Codes: watchlist_squawks — List specific codes or ranges to watch for.
-    Aircraft ICAO Codes: watchlist_aircraft — Add specific ICAO codes to the list.
-    Altitude Threshold: altitude_threshold — Set the maximum altitude for monitoring.
-    Aircraft Categories: watchlist_categories — Specify aircraft categories to monitor (e.g., commercial, private, etc.).
+### Supported Watchlist Fields
 
-Alert Customization
+- `altitude_below`: Trigger if altitude is below this value (in feet)
+- `speed_above`: Trigger if speed exceeds this value (in knots)
+- `squawks`: Comma-separated list of emergency/transponder squawk codes
+- `callsigns`: Partial or full flight callsigns (case-insensitive)
+- `icaos`: Specific aircraft hex codes
 
-    Verbose Mode: Set verbose = True to receive all alerts, regardless of criteria matching.
-    Alert Interval: Adjust alert_interval to set how often alerts are repeated for the same aircraft.
-    Notification Settings: The script currently sends alerts to an IRC channel and optionally to a web API endpoint but can be extended to other platforms (e.g., email, SMS, WhatsApp).
+---
 
-Example Alert
+## 📡 Data Source
 
-An example alert message in the IRC channel:
+This script pulls data from a JSON feed such as:
+- [`/data.json`](https://github.com/wiedehopf/tar1090#datajson) from a local Tar1090 or ADS-B Exchange instance
 
-yaml
+Make sure your Pi is feeding data and your receiver has this JSON endpoint enabled.
 
-Alert! Aircraft EZY428M (407d22) with squawk 6351 at altitude 30625 ft, category A3, emergency status: none. 
-Location: x, -y | Distance: 10.2 miles NNE (22.5°) | Ground Speed: 450 knots, IAS: 430 knots, TAS: 470 knots | ETA: 82 seconds | Track here: https://globe.adsbexchange.com/?icao=407d22
+---
 
-Formatting
+## 🔄 Alert Flow
 
-    Bold & Color Codes: Flight code, altitude, and squawk are displayed in bold with white, yellow, and green, respectively.
-    Distance & Direction: Calculated based on the reference location and displayed in miles.
-    ETA: Calculated based on the aircraft’s ground speed.
+- Each aircraft is checked against the configured criteria
+- Alerts are sent once per aircraft (per event)
+- Incomplete alerts (e.g. missing speed/location) are suppressed until data is complete
+- Duplicate or repeat alerts are avoided to reduce IRC noise
 
-Contributing
+---
 
-Contributions are welcome! Please fork the repository and submit a pull request with any enhancements or bug fixes. For major changes, open an issue first to discuss your ideas.
-License
+## 🤝 Contributing
 
-This project is licensed under the MIT License. See the LICENSE file for details.
-Acknowledgments
+Pull requests, suggestions, and improvements are welcome!
 
-Special thanks to ADSBexchange and Tar1090 for providing open-source ADS-B data that powers this project.
+---
+
+## 📄 License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
+
+*Happy spotting from your Pi!*
