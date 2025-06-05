@@ -156,6 +156,59 @@ def ping_listener(irc):
             print(f"Error in PING listener: {e}")
             break
 
+def check_for_update(irc, icao, original_data):
+    time.sleep(30)
+    data = fetch_aircraft_data()
+    if data and "aircraft" in data:
+        for aircraft in data["aircraft"]:
+            if aircraft.get("hex") == icao:
+                latitude = aircraft.get("lat")
+                longitude = aircraft.get("lon")
+                ground_speed = aircraft.get("gs", "N/A")
+
+                if ((latitude and longitude and not (original_data.get("lat") and original_data.get("lon"))) or
+                    (ground_speed != "N/A" and original_data.get("gs", "N/A") == "N/A")):
+
+                    raw_alt = str(aircraft.get("alt_baro", "0"))
+                    digits = "".join(filter(str.isdigit, raw_alt))
+                    altitude = int(digits) if digits else 0
+
+                    category = aircraft.get("category")
+                    emergency = aircraft.get("emergency")
+                    squawk = aircraft.get("squawk")
+                    indicated_air_speed = aircraft.get("ias", "N/A")
+                    true_air_speed = aircraft.get("tas", "N/A")
+                    distance_str, eta_str, speed_str = "", "", ""
+
+                    if ground_speed != "N/A":
+                        speed_str += f"Ground Speed: {ground_speed} knots"
+                    if indicated_air_speed != "N/A":
+                        speed_str += f", IAS: {indicated_air_speed} knots"
+                    if true_air_speed != "N/A":
+                        speed_str += f", TAS: {true_air_speed} knots"
+                    if latitude and longitude:
+                        distance = haversine(reference_lat, reference_lon, latitude, longitude)
+                        direction, bearing = calculate_bearing(reference_lat, reference_lon, latitude, longitude)
+                        distance_str = f" | Distance: {distance:.2f} miles {direction} ({bearing:.1f}\u00b0)"
+                        if ground_speed != "N/A" and ground_speed > 0:
+                            eta_seconds = (distance * 3600) / ground_speed
+                            eta_str = f" | ETA: {eta_seconds:.0f} seconds"
+
+                    flight_code = f"\x02\x0300{aircraft.get('flight', 'Unknown')}\x03\x02"
+                    altitude_str = f"\x02\x0308{altitude} ft\x03\x02"
+                    squawk_str = f"\x02\x0303{squawk}\x03\x02"
+                    message = (f"UPDATE! Aircraft {flight_code} ({icao}) with squawk {squawk_str} "
+                               f"at altitude {altitude_str}, category {category}, emergency status: {emergency}. "
+                               f"Location: {latitude}, {longitude}{distance_str} | {speed_str}{eta_str}")
+                    if icao:
+                        message += f" | Track here: https://globe.adsbexchange.com/?icao={icao}"
+                    send_message(irc, message)
+                    send_web_alert(message)
+                break
+    with pending_updates_lock:
+        if icao in pending_updates:
+            del pending_updates[icao]
+
 # === Start IRC and Main Loop ===
 irc = connect_to_irc()
 ping_thread = threading.Thread(target=ping_listener, args=(irc,), daemon=True)
@@ -188,7 +241,6 @@ while True:
                 (emergency and emergency.lower() != "none")
             )
 
-            # Skip total junk
             if not (squawk or icao or altitude or emergency or category):
                 continue
 
@@ -222,6 +274,17 @@ while True:
                 send_message(irc, message)
                 send_web_alert(message)
                 time.sleep(bot_message_delay)
+
+                needs_update = (latitude is None or longitude is None or ground_speed == "N/A")
+                if needs_update and icao not in pending_updates:
+                    with pending_updates_lock:
+                        pending_updates[icao] = True
+                    update_thread = threading.Thread(
+                        target=check_for_update,
+                        args=(irc, icao, aircraft.copy()),
+                        daemon=True
+                    )
+                    update_thread.start()
 
     save_last_alert_time()
     time.sleep(10)
