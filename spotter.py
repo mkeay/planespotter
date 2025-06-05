@@ -171,6 +171,10 @@ def check_for_update(irc, icao, original_data):
     if data and "aircraft" in data:
         for aircraft in data["aircraft"]:
             if aircraft.get("hex") == icao:
+                # Skip aircraft with ICAO starting with tilde
+                if icao and icao.startswith("~"):
+                    break
+
                 # Check if we now have location or speed data that was missing
                 latitude = aircraft.get("lat")
                 longitude = aircraft.get("lon")
@@ -236,8 +240,13 @@ while True:
     if data and "aircraft" in data:
         current_time = datetime.now()
         for aircraft in data["aircraft"]:
-            squawk = aircraft.get("squawk")
             icao = aircraft.get("hex")
+
+            # Skip aircraft with ICAO starting with tilde
+            if icao and icao.startswith("~"):
+                continue
+
+            squawk = aircraft.get("squawk")
             altitude = int("".join(filter(str.isdigit, str(aircraft.get("alt_baro", "0")))))
             category = aircraft.get("category")
             emergency = aircraft.get("emergency")
@@ -246,6 +255,20 @@ while True:
             ground_speed = aircraft.get("gs", "N/A")
             indicated_air_speed = aircraft.get("ias", "N/A")
             true_air_speed = aircraft.get("tas", "N/A")
+
+            # Check if aircraft has meaningful data
+            has_valid_data = (
+                squawk and 
+                altitude > 0 and 
+                category and 
+                latitude is not None and 
+                longitude is not None
+            )
+
+            # Skip aircraft with no meaningful data, but don't update last_alert_time
+            if not has_valid_data:
+                continue
+
             distance_str, eta_str, speed_str = "", "", ""
 
             if ground_speed != "N/A":
