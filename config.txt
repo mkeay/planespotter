@@ -1,0 +1,23 @@
+[DEFAULT]
+# IRC Configuration
+server = irc.network
+port = 6667
+nickname = nickname
+realname = a real name
+channel = #channel
+bot_message_delay = 1
+ping_wait_timeout = 10
+
+# Location Configuration
+reference_lat = xx.xxxx
+reference_lon = xx.xxxx
+
+# Watchlist & Alert Settings
+altitude_threshold = 3000
+alert_interval_minutes = 15
+verbose = False
+
+watchlist_squawks = 0001,0020,7500,7700
+watchlist_categories = A6,A7,B2,B3,B4,B6,B7
+
+watchlist_aircraft = a835af,a2c671,a7c747,ae4ae8,ae4ae9,ae01ce,ae01cf,ae4aed,ae4aee,ae0402,ae0410,ae0411,ae0412,ae11f9,ae11fa,a72b76,a9b8f1,aa3c1f,a69f59,43c6f9,43c4ec,43c4ed,a4ff61,a9e51e,a3f3f6,a5c37c,a54ac6,a326ca,ac5c30,a0fc23,a98682,aa5ed6,a4f8e0,a6a378,a0a5c1,a2894f,a66aa8,ac7d60,a835b0,a4b8a2,4691c7,14f11f,14f100,424070,424071,43eb2e,4ca83b,3c6644,3c6645,3b7ac8,33ffd9,471f49,440417,4b1a02,71bc08,7c4774,e48f76,424242,a0db06,aa3410,a4c7e4,a4c7e5,a6f3a7,a6f3a8,a8df5a,ac82ec,acd5d4,abd8d7,acd6cc,a547c3,508000,508101,508102,508103,508104,508105,508035,508036,50801c,508037,50803a,15407d,15406c,15406b,154093,5081a2,5081a3,145960,145961,ae07aa,ae07ac,ae07ae,ae11f1,ae11f2,43c26f,43c270,710258,710259,896048,896049,06a1e3,06a1e4,a494a9,a77bd6,a5c657,a154c5,a6dead
