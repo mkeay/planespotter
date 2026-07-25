@@ -1,0 +1,10 @@
+#!/bin/sh
+# Post a message to the norris IRC channel via the planespotter announce
+# spool. Usage: norris-say "your message here"   (or pipe: cmd | norris-say)
+DIR="${NORRIS_ANNOUNCE_DIR:-/home/pi/norris-announce}"
+mkdir -p "$DIR"
+if [ $# -gt 0 ]; then
+    printf '%s\n' "$*" > "$DIR/$(date +%s%N).$$"
+else
+    cat > "$DIR/$(date +%s%N).$$"
+fi

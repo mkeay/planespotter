@@ -1,0 +1,151 @@
+[DEFAULT]
+# IRC Configuration
+server = irc.network
+port = 6667
+nickname = nickname
+realname = a real name
+channel = #channel
+bot_message_delay = 1
+
+# Greet particular nicks as they join: "nick:message" pairs separated by ";".
+# The nick is prefixed automatically. Leave blank to disable.
+# greet_nicks = somenick:welcome back
+greet_nicks =
+
+# Station callsign — used when configuring SondeHub feeding
+# (radiosonde_auto_rx station.cfg) and other uploader integrations
+station_callsign = N0CALL
+
+# Location Configuration (reference point for distance/bearing/ETA)
+reference_lat = xx.xxxx
+reference_lon = xx.xxxx
+
+# Data Source (readsb/tar1090 JSON, read straight from disk)
+local_json = /run/readsb/aircraft.json
+poll_seconds = 10
+recheck_seconds = 30
+state_file = last_alert_time.json
+
+# Online check: alerts on watchlist aircraft nearby that the local receiver
+# can't see (terrain-masked), tagged "(online data)". adsb.lol is a free
+# aggregator; adsb.fi and airplanes.live use the same URL/response format.
+# Wide enough that an aircraft descending out of a neighbouring terminal area
+# is seen on the way down, not just once it's nearly overhead.
+online_enabled = false
+online_radius_nm = 55
+online_poll_seconds = 60
+online_url = https://api.adsb.lol/v2/point/{lat}/{lon}/{radius}
+
+# Wide sweep, counting only -- it does not alert. It used to post a "Heads up"
+# for any aircraft holding a converging course (steady bearing, closing range),
+# but that shape means very little at this radius: a straight-line overflight
+# that will miss by 80 miles shows it for the whole approaching half of its
+# pass. In practice it fired constantly on transatlantic transports at
+# FL300-350 that were never coming here and couldn't be seen or heard anyway.
+# It now just tallies distinct high-altitude military contacts for the daily
+# digest -- the interesting part being how many of them there are.
+long_range_enabled = false
+long_range_radius_nm = 150
+long_range_poll_seconds = 180
+
+# Optional: POST each alert to this URL (leave blank to disable)
+webapi =
+
+# Extra alert triggers: military flag (dbFlags; needs readsb --db-file for
+# local traffic, free from the aggregator) and local MLAT-only targets
+# (aircraft without ADS-B positioned by the MLAT network — often military)
+alert_military = true
+alert_mlat = true
+
+# Exclusion zones: skip alerts (except emergencies) for aircraft below
+# an altitude near these points, as lat,lon,radius_nm,below_alt_ft with
+# ";" between zones — e.g. a nearby airport's circuit and approaches,
+# while overflights above the cutoff still alert. Leave blank to disable.
+# exclude_zones = 55.5094,-4.5867,15,15000
+exclude_zones =
+
+# Airports whose arrivals are someone else's business. Same format, and used
+# two ways: traffic sitting inside one of these below its cutoff is ignored,
+# and traffic that is *descending and lined up on* one is treated as an
+# arrival there rather than a visitor — which is what a jet letting down
+# toward a neighbouring airport looks like when it happens to point your way.
+# airport_zones = 55.5094,-4.5867,15,15000; 55.8719,-4.4331,12,15000
+airport_zones =
+
+# Append a planespotters.net photo link to alerts
+photo_links = true
+
+# Announce spool: other services (dumpvdl2, radiosonde_auto_rx,
+# raspberry-noaa hooks, cron...) drop text files here — e.g. via the
+# norris-say helper — and each line is relayed to the IRC channel.
+# Leave blank to disable.
+announce_dir =
+
+# Radiosonde alerts from SondeHub (community aggregator; works without
+# a local sonde receiver — a local one just makes you a contributor).
+# Alerts once when a sonde is sighted in radius and again when it starts
+# descending, with a sondehub.org tracking link.
+sonde_enabled = false
+sonde_radius_km = 75
+sonde_poll_seconds = 300
+sonde_max_age_minutes = 30
+
+# Daily receiver stats digest to IRC
+digest_enabled = true
+digest_time = 08:00
+stats_json = /run/readsb/stats.json
+
+# Nightly astronomy almanac, posted astro_lead_minutes before sunset:
+# sunset/sunrise, moon phase & full-moon countdown, darkness times and
+# best observing window (Clear Outside, primary; Open-Meteo fallback),
+# seeing/transparency (7Timer!), a 0-100 clear-sky score, frost/snow
+# warnings only when expected, and a bins-out reminder on the eve of a
+# collection day (needs bins_ical_url below)
+astro_enabled = false
+astro_lead_minutes = 60
+
+# Morning briefing at morning_time (local): saints'/national/
+# international days, bin collection from a council iCal feed (only
+# mentioned when a collection is due; kind of bin only, never the
+# address; leave bins_ical_url blank to skip), today's weather
+# (Open-Meteo), and tonight's likely-visible ISS passes
+# (api.g7vrd.co.uk, >= iss_min_elevation degrees at peak)
+morning_enabled = false
+morning_time = 06:00
+bins_ical_url =
+iss_min_elevation = 10
+
+# Watchlist & Alert Settings
+#
+# altitude_threshold: plain civilian traffic only alerts below this, and only
+# when the local receiver can see it.
+#
+# alert_ceiling_ft: the see/hear ceiling. Above it nothing alerts except the
+# hand-picked watchlist_aircraft and emergencies — if it can't be seen or heard
+# from the ground, there's little point interrupting for it. High-altitude
+# military is counted and reported once a day by the digest instead. This is
+# the single biggest noise control: on the author's receiver ~64% of alerts
+# were above 8000 ft, essentially all of it airway traffic passing through.
+#
+# inbound_cpa_nm: how close an aircraft's projected path must pass to count as
+# actually coming here. "Pointing roughly this way" is not enough — most
+# airway traffic points at you for a while en route to somewhere else.
+altitude_threshold = 3000
+alert_ceiling_ft = 8000
+inbound_cpa_nm = 25
+alert_interval_minutes = 15
+verbose = False
+
+# "Went low and vanished heading our way": something low and tracking toward
+# you that drops off the feed short of the local receiver, rather than landing
+# somewhere or carrying on past. In hilly terrain that's what an arrival looks
+# like — it drops below every receiver's horizon before it gets to you.
+vanish_alert_enabled = true
+vanish_max_dist_nm = 40
+
+# Squawk codes; single codes or ranges (e.g. 7500,7600-7700)
+watchlist_squawks = 0001,0020,7500,7700
+# ADS-B emitter categories (A6/A7 = high performance/rotorcraft etc.)
+watchlist_categories = A6,A7,B2,B3,B4,B6,B7
+# ICAO hex codes, comma separated
+watchlist_aircraft = 43c6f9,ae4ae8

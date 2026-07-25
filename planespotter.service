@@ -1,0 +1,14 @@
+[Unit]
+Description=Planespotter ADS-B IRC alert bot
+Wants=network-online.target
+After=network-online.target readsb.service
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/python3 /home/pi/planespotter/spotter.py --config /home/pi/config.txt
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
