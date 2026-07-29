@@ -440,6 +440,9 @@ class AlertState:
 
 # === IRC ===
 
+IRC_IDLE_TIMEOUT = 300  # seconds with no data at all (incl. server PINGs) before we assume the link is dead
+
+
 class IrcClient:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -450,6 +453,7 @@ class IrcClient:
         self.backoff = 5
         self.nick = cfg.nickname
         self.greeted = {}
+        self.last_recv = 0.0
 
     def ensure_connected(self):
         if self.connected or time.time() < self.next_attempt:
@@ -468,7 +472,15 @@ class IrcClient:
     def _connect(self):
         log.info("Connecting to %s:%d ...", self.cfg.server, self.cfg.port)
         self.sock = socket.create_connection((self.cfg.server, self.cfg.port), timeout=30)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+        except (AttributeError, OSError):
+            pass  # keepalive tuning isn't available on every platform
         self.buffer = b""
+        self.last_recv = time.time()
         nick = self.nick = self.cfg.nickname
         self._send_line(f"NICK {nick}")
         self._send_line(f"USER {nick} 0 * :{self.cfg.realname}")
@@ -498,6 +510,7 @@ class IrcClient:
             return []
         if not data:
             raise OSError("connection closed by server")
+        self.last_recv = time.time()
         self.buffer += data
         lines = []
         while b"\r\n" in self.buffer:
@@ -523,8 +536,13 @@ class IrcClient:
 
     def poll(self):
         """Call regularly: answers server PINGs, greets any configured nick as
-        it joins, and notices dropped connections."""
+        it joins, and notices dropped or silently stale connections."""
         if not self.connected:
+            return
+        if time.time() - self.last_recv > IRC_IDLE_TIMEOUT:
+            log.warning("IRC connection stale (no data in over %ds), reconnecting", IRC_IDLE_TIMEOUT)
+            self._teardown()
+            self.next_attempt = time.time() + self.backoff
             return
         try:
             lines = self._read_lines(timeout=0)
