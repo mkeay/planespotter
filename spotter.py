@@ -244,6 +244,14 @@ def is_military(ac):
     return bool((ac.get("dbFlags") or 0) & 1)
 
 
+# "No info"/reserved emitter categories -- Category Set D (D0-D7) is entirely
+# unassigned, and A0/B0/B5/C0/C6/C7 are each that set's own "no information"
+# or reserved slot. A DF17 message reporting one of these passed CRC (so the
+# bits are real), but it carries no more information than no category at all.
+RESERVED_CATEGORIES = {"A0", "B0", "B5", "C0", "C6", "C7",
+                        "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"}
+
+
 def has_identity(ac):
     """Whether there is any evidence this is a real aircraft beyond a bare
     altitude reply: a position, a callsign, a squawk, or a database match.
@@ -254,10 +262,11 @@ def has_identity(ac):
     reporting a perfectly clean altitude and nothing else. Position frames
     (DF17) carry a real CRC and simply fail instead, which is why these
     phantoms never have one."""
+    category = ac.get("category")
     return bool(ac.get("lat") is not None
                 or (ac.get("flight") or "").strip()
                 or ac.get("squawk")
-                or ac.get("category")   # emitter category is a DF17 message, CRC-protected
+                or (category and category not in RESERVED_CATEGORIES)
                 or ac.get("t") or ac.get("desc") or ac.get("r"))
 
 
@@ -326,7 +335,14 @@ def meets_criteria(ac, cfg, local=True):
     altitude = parse_altitude(ac.get("alt_baro"))
     if altitude is None:
         return False  # can't judge the ceiling yet; re-checked as data arrives
-    if see_hear_worthy(ac, cfg, local) and altitude <= cfg.alert_ceiling_ft:
+    # is_military() is a bare hex-range lookup (e.g. 0xAE0000-0xAFFFFF for US
+    # military) with nothing else backing it up, so a phantom Mode-S address
+    # landing in one of those blocks reads as a military contact out of thin
+    # air -- that block alone is ~1/128 of the address space. has_identity()
+    # is a no-op for the squawk/category matches in see_hear_worthy (a match
+    # there already implies one of those fields is set) but it closes that
+    # hole.
+    if see_hear_worthy(ac, cfg, local) and altitude <= cfg.alert_ceiling_ft and has_identity(ac):
         return True
     # Plain civilian traffic needs corroboration as well as a low altitude,
     # or a phantom Mode-S address reporting one becomes an alert.
