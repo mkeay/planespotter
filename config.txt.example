@@ -26,6 +26,21 @@ poll_seconds = 10
 recheck_seconds = 30
 state_file = last_alert_time.json
 
+# Alert history (SQLite). Every line sent to the channel is appended here
+# with the full aircraft record behind it, so the corpus survives reboots --
+# the journal is often RAM-only and holds hours, not months. Receiver up/down
+# transitions are recorded in the same file, which is what lets a later
+# analysis tell "nothing flew over" apart from "the dongle was unplugged".
+# Leave empty to disable.
+alert_db = /home/pi/alerts.db
+
+# Who to message privately when the local feed stops being readable -- a dead
+# dongle is otherwise silent, since the channel just goes quiet while the
+# online ring carries on. Empty disables the notice. The reminder repeats on
+# this interval while the fault stands; 0 sends it once only.
+alert_nick =
+receiver_alert_repeat_hours = 6
+
 # Online check: alerts on watchlist aircraft nearby that the local receiver
 # can't see (terrain-masked), tagged "(online data)". adsb.lol is a free
 # aggregator; adsb.fi and airplanes.live use the same URL/response format.
@@ -64,12 +79,15 @@ alert_mlat = true
 # exclude_zones = 55.5094,-4.5867,15,15000
 exclude_zones =
 
-# Airports whose arrivals are someone else's business. Same format, and used
-# two ways: traffic sitting inside one of these below its cutoff is ignored,
-# and traffic that is *descending and lined up on* one is treated as an
-# arrival there rather than a visitor — which is what a jet letting down
-# toward a neighbouring airport looks like when it happens to point your way.
-# airport_zones = 55.5094,-4.5867,15,15000; 55.8719,-4.4331,12,15000
+# Airports whose arrivals are someone else's business. Same format plus an
+# optional name, and used two ways: traffic sitting inside one of these below
+# its cutoff is ignored, and traffic *lined up on* one — descending, or
+# holding level close in below the cutoff — is treated as an arrival there
+# rather than a visitor, which is what a jet letting down toward a
+# neighbouring airport looks like when it happens to point your way.
+# Watchlist traffic isn't suppressed; with a name set, its alert says
+# "probably landing at <name>" instead.
+# airport_zones = 55.5094,-4.5867,15,15000,Prestwick; 55.8719,-4.4331,12,15000,Glasgow
 airport_zones =
 
 # Append a planespotters.net photo link to alerts
@@ -100,9 +118,42 @@ stats_json = /run/readsb/stats.json
 # best observing window (Clear Outside, primary; Open-Meteo fallback),
 # seeing/transparency (7Timer!), a 0-100 clear-sky score, frost/snow
 # warnings only when expected, and a bins-out reminder on the eve of a
-# collection day (needs bins_ical_url below)
+# collection day (needs bins_ical_url below).
+#
+# It also carries, computed locally with no network involved:
+#   - which naked-eye planets get up tonight, how high and when
+#   - a lunar eclipse, but only on the nights there is one and only
+#     when the moon is above the horizon here for it
+#   - three deep-sky targets well placed at the darkest hour, but only
+#     when seeing AND transparency are "average" or better -- no point
+#     sending anyone out after a faint galaxy through poor transparency
+# The morning briefing likewise mentions a solar eclipse only on a day
+# there is one visible from these coordinates.
 astro_enabled = false
 astro_lead_minutes = 60
+
+# Aurora alerts. Checked every aurora_poll_minutes through the dark
+# hours (sun more than 6 degrees down) rather than saved for the nightly
+# report, because the aurora doesn't wait for sunset. Silent unless
+# something is actually happening, and silent when the sky is more than
+# 80% clouded over -- no alert for an aurora nobody could see.
+#
+# Sources: AuroraWatch UK (Lancaster University magnetometers -- a
+# nowcast, status credited in the message as their terms require) and
+# NOAA SWPC's Kp forecast for the hours ahead. Either can trigger it;
+# the Kp threshold is worked out from your latitude (roughly Kp 5 at
+# 56 N, Kp 7 at 52 N).
+#
+# aurora_min_status: lowest AuroraWatch level worth an alert --
+# yellow (camera-only activity), amber (naked eye from Scotland and
+# northern England) or red (naked eye anywhere in the UK). Below about
+# 56 N, yellow is ignored regardless: it doesn't reach that far south.
+# aurora_repeat_hours: an escalation always alerts; the same level
+# re-alerts only after this long.
+aurora_enabled = false
+aurora_min_status = amber
+aurora_poll_minutes = 15
+aurora_repeat_hours = 3
 
 # Morning briefing at morning_time (local): saints'/national/
 # international days, bin collection from a council iCal feed (only
@@ -143,9 +194,52 @@ verbose = False
 vanish_alert_enabled = true
 vanish_max_dist_nm = 40
 
-# Squawk codes; single codes or ranges (e.g. 7500,7600-7700)
-watchlist_squawks = 0001,0020,7500,7700
+# Squawk codes; single codes or ranges (e.g. 7500,7600-7700). 0020 and 0036
+# only alert within SQUAWK_DISTANCE_LIMITS_MI's radius (spotter.py) -- 6 and
+# 3 miles respectively -- since they're common conspicuity codes elsewhere.
+# Alerts annotate the squawk with what it is for, or who controls it,
+# under the UK SSR code assignment plan -- "0020 (air ambulance / HEMS
+# medivac)", "0036 (helicopter pipeline/powerline inspection)", "5271
+# (transit code, Channel Islands)" -- from the tables in squawks.py,
+# which cover all 4096 codes. Where a code is shared between units too
+# far apart to clash, the most specific few are listed.
+watchlist_squawks = 0001,0020,0036,7500,7700
 # ADS-B emitter categories (A6/A7 = high performance/rotorcraft etc.)
 watchlist_categories = A6,A7,B2,B3,B4,B6,B7
 # ICAO hex codes, comma separated
 watchlist_aircraft = 43c6f9,ae4ae8
+
+# Callsign prefixes that alert wherever they're going, at any altitude —
+# for outfits that fly whichever airframe is serviceable (display teams,
+# QRA flights), where a hex watchlist can't follow them
+watchlist_callsigns = REDARROW
+
+# Type codes tagged (Zzz) instead of Alert! — traffic you can identify by
+# ear before reading the line, so it should inform without exciting
+snooze_types = R22,R44,R66
+
+# Behavioural detectors, alerting on what an aircraft is doing rather than
+# what it is. Loitering: two full turns' worth of accumulated course change
+# from an orbit of up to roughly loiter_radius_nm radius — police/SAR
+# orbits; local data, only at or below alert_ceiling_ft and within 15 nm
+# ("something is working YOUR area"), gliders/ultralights excluded,
+# re-announced hourly while it keeps circling. Formation: two or more
+# airborne military aircraft in close company (co-level, matched
+# speed/heading, within formation_max_sep_nm) for formation_min_sweeps
+# consecutive online sweeps — alerts at ANY altitude, one announcement per
+# flight; a re-alert needs a new member or six hours. Survey: 20+ minutes
+# of lawnmower legs on one axis marching steadily across an area (the
+# march is what distinguishes it from a hold) — any altitude, 6 h
+# per-aircraft cooldown.
+loiter_alert_enabled = true
+loiter_radius_nm = 4
+formation_enabled = true
+formation_max_sep_nm = 2
+formation_min_sweeps = 3
+survey_enabled = true
+
+# Optional elevation grid for height-above-ground in alert text ("at
+# altitude 3400 ft (≈900 ft AGL)") — barometric altitude flatters
+# everything in hill country. Build once with tools/build_terrain.py from
+# the free OS Terrain 50 download (GB only). Blank disables.
+terrain_grid =

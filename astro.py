@@ -2,10 +2,11 @@
 """Astronomy almanac for the norris platform: sunrise/sunset and moon
 phase computed locally, tonight's observing conditions from 7Timer!'s
 ASTRO product and Open-Meteo (the same model data behind sites like
-clearoutside.com), a calendar of saints' days and UK national /
-international observances, and a morning briefing: today's calendar,
-bin collection (council iCal feed), day weather and likely-visible ISS
-passes. Stdlib only."""
+clearoutside.com), likely-visible ISS passes, a calendar of saints'
+days and UK national / international observances, and a morning
+briefing: today's calendar, bin collection (council iCal feed) and day
+weather. Positions of the moon and planets, eclipse circumstances and
+deep-sky picks come from ephemeris.py, computed locally. Stdlib only."""
 
 import json
 import logging
@@ -14,6 +15,9 @@ import time
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from math import sin, cos, acos, asin, atan2, radians, degrees, pi
+from xml.etree import ElementTree
+
+import ephemeris
 
 try:
     from zoneinfo import ZoneInfo
@@ -587,8 +591,12 @@ def fetch_iss_passes(lat, lon, min_elevation=10):
     -6°) but the station is still sunlit (sun above the shadow limit
     for its orbit height) at closest approach. None if the API is
     unreachable, [] if there are simply no visible passes."""
+    # Param is "minelevation" (no underscore) per the API's own OpenAPI spec --
+    # "min_elevation" is silently ignored, so it was quietly falling back to
+    # the API's default of 30°, dropping every genuine 10-29° pass before our
+    # own dark-sky filter below ever saw them.
     url = (f"https://api.g7vrd.co.uk/v1/satellite-passes/25544/{lat}/{lon}.json"
-           f"?hours=24&min_elevation={min_elevation}")
+           f"?hours=24&minelevation={min_elevation}")
     try:
         passes = _get_json(url).get("passes", [])
     except (OSError, ValueError) as e:
@@ -608,6 +616,233 @@ def fetch_iss_passes(lat, lon, min_elevation=10):
     return visible
 
 
+# === Aurora ===
+
+AURORAWATCH_URL = "https://aurorawatch-api.lancs.ac.uk/0.2/status/current-status.xml"
+KP_FORECAST_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
+# Cloud cover (%) past which there is no point telling anyone to look up.
+AURORA_MAX_CLOUD = 80.0
+_AURORA_LEVELS = ("green", "yellow", "amber", "red")
+_AURORA_MEANING = {
+    "yellow": "minor activity, camera more likely than eye",
+    "amber": "likely visible by eye from Scotland and northern England",
+    "red": "likely visible by eye from anywhere in the UK",
+}
+
+
+def _get_bytes(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def fetch_aurora_status():
+    """AuroraWatch UK's current alert level -- "green", "yellow", "amber"
+    or "red" -- from magnetometer readings updated every three minutes.
+    None if unavailable.
+
+    This is a nowcast of what the magnetic field is doing right now, not
+    a forecast, which is why aurora_alert() pairs it with NOAA's Kp
+    outlook. AuroraWatch UK's terms ask for no more than one request
+    every three minutes and for the status to be credited to them; both
+    are honoured (see aurora_alert's caller and the acknowledgement in
+    the line it builds)."""
+    try:
+        root = ElementTree.fromstring(_get_bytes(AURORAWATCH_URL))
+    except (OSError, ElementTree.ParseError) as e:
+        log.warning("AuroraWatch fetch failed: %s", e)
+        return None
+    site = root.find("site_status")
+    level = site.get("status_id") if site is not None else None
+    return level if level in _AURORA_LEVELS else None
+
+
+def aurora_rank(status):
+    """AuroraWatch's levels as an order, so a caller polling through the
+    night can tell an escalation from a level that has just persisted.
+    -1 when the status is unknown."""
+    return _AURORA_LEVELS.index(status) if status in _AURORA_LEVELS else -1
+
+
+def fetch_kp_forecast(start, end):
+    """The highest planetary K index NOAA SWPC forecasts for the window,
+    from its three-day outlook in three-hour blocks. None if unavailable,
+    or if the window starts after the forecast runs out."""
+    try:
+        rows = _get_json(KP_FORECAST_URL)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        log.warning("NOAA Kp forecast fetch failed: %s", e)
+        return None
+    best = None
+    for row in rows:
+        try:
+            when = datetime.fromisoformat(row["time_tag"]).replace(
+                tzinfo=timezone.utc)
+            kp = float(row["kp"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        # Each entry covers the three hours that follow it; the feed also
+        # carries the last few days as "observed", which simply fall
+        # outside tonight's window.
+        if when < end and when + timedelta(hours=3) > start:
+            best = kp if best is None else max(best, kp)
+    return best
+
+
+def kp_needed(lat):
+    """Roughly the planetary K index at which the aurora first reaches
+    the northern horizon at this latitude. The published viewing-latitude
+    table for the European sector steps about two degrees per Kp: Kp5
+    reaches the Scottish Borders (56 N), Kp7 the Midlands (52 N), Kp9
+    northern France (48 N)."""
+    return max(0.0, min(9.0, (66.0 - lat) / 2.0))
+
+
+def fetch_current_cloud(lat, lon):
+    """Cloud cover right now in per cent, or None. Only used to decide
+    whether an aurora alert would be pointing at a grey ceiling, so it is
+    fetched lazily, after the geomagnetic side has already said yes."""
+    url = ("https://api.open-meteo.com/v1/forecast"
+           f"?latitude={lat}&longitude={lon}&current=cloud_cover")
+    try:
+        return float(_get_json(url)["current"]["cloud_cover"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        log.warning("Open-Meteo current cloud fetch failed: %s", e)
+        return None
+
+
+def aurora_report(lat, lon, start, end, cloud=None, min_status="amber"):
+    """Whether the aurora is worth going outside for, as
+    (status, line).
+
+    `status` is AuroraWatch UK's current level, or None if their API is
+    unreachable -- returned separately so a caller polling through the
+    night can tell a fresh escalation from a level that has merely
+    persisted. `line` is the IRC line, or None when there is nothing to
+    say -- which is the usual answer, and the point: a nightly "no
+    aurora tonight" is noise. It is also None when the sky is
+    comprehensively clouded over, since the finest substorm in a decade
+    is invisible through eight eighths of stratus.
+
+    The two sources answer different questions and both are used: the
+    AuroraWatch UK status is a nowcast of what the magnetic field is
+    doing this minute, NOAA's Kp is a forecast for the hours ahead."""
+    status = fetch_aurora_status()
+    kp = fetch_kp_forecast(start, end)
+    needed = kp_needed(lat)
+    floor = max(1, aurora_rank(min_status))
+    rank = aurora_rank(status)
+    if not (rank >= floor or (kp is not None and kp >= needed)):
+        return status, None
+
+    if cloud is None:
+        cloud = fetch_current_cloud(lat, lon)
+    if cloud is not None and cloud >= AURORA_MAX_CLOUD:
+        log.info("Aurora active (%s) but %.0f%% cloud -- staying quiet",
+                 status, cloud)
+        return status, None
+
+    parts = ["\x02\x0309AURORA\x03\x02 possible"]
+    if rank >= 1:
+        parts.append(f"AuroraWatch UK status \x02{status}\x03\x02"
+                     f" ({_AURORA_MEANING[status]})")
+    if kp is not None:
+        parts.append(f"Kp up to {kp:.0f} forecast"
+                     f" (about {needed:.0f} needed at this latitude)")
+    if cloud is not None:
+        parts.append(f"{cloud:.0f}% cloud")
+    parts.append("look north, away from the streetlights")
+    return status, " | ".join(parts) + " [status: AuroraWatch UK]"
+
+
+# === Eclipses, planets and deep sky ===
+
+# 7Timer's 1 (best) to 8 (worst) scales: at or under this is "average"
+# in _scale_word, and the point where suggesting targets is worthwhile.
+AVERAGE_OR_BETTER = 4.5
+
+
+def _night_samples(night_start, night_end, lat, lon, step_minutes=20):
+    """The night sliced into (time, sun altitude) pairs. The sun's
+    altitude rides along because how dark it is decides what counts as
+    visible, and recomputing it per planet would be wasteful."""
+    samples, when = [], night_start
+    step = timedelta(minutes=step_minutes)
+    while when <= night_end:
+        samples.append((when, sun_altitude(when, lat, lon)))
+        when += step
+    return samples
+
+
+def eclipse_line(night_start, night_end, lat, lon):
+    """Tonight's lunar eclipse as an IRC line, or None -- which it is on
+    all but a handful of nights a decade. Only counts an eclipse with the
+    moon above the horizon here: one that happens while the moon is under
+    our feet is somebody else's."""
+    mid = night_start + (night_end - night_start) / 2
+    if not ephemeris.eclipse_possible(mid, lunar=True):
+        return None
+    ecl = ephemeris.lunar_eclipse(night_start, night_end, lat, lon)
+    if ecl is None:
+        return None
+    if ecl["kind"] == "total":
+        what = "\x02\x0304TOTAL LUNAR ECLIPSE\x03\x02 tonight"
+    elif ecl["kind"] == "partial":
+        what = ("\x02\x0307PARTIAL LUNAR ECLIPSE\x03\x02 tonight — "
+                f"{ecl['magnitude'] * 100:.0f}% of the moon into the umbra")
+    else:
+        what = ("Penumbral lunar eclipse tonight — a subtle shading, "
+                "easy to miss")
+    return (f"{what} | greatest at \x02{_clock(ecl['peak'])}\x03 with the moon "
+            f"{ecl['altitude']:.0f}° up | visible from here "
+            f"{_clock(ecl['start'])}–{_clock(ecl['end'])}")
+
+
+def solar_eclipse_line(day, lat, lon):
+    """Today's solar eclipse as seen from this spot, or None. Worked
+    topocentrically, so the percentage is the one for here rather than
+    for the country."""
+    sunrise, sunset = sun_times(day, lat, lon)
+    if sunrise is None or sunset is None:
+        return None
+    if not ephemeris.eclipse_possible(sunrise, lunar=False):
+        return None
+    ecl = ephemeris.solar_eclipse(sunrise, sunset, lat, lon)
+    if ecl is None:
+        return None
+    kind = {"total": "\x02\x0304TOTAL SOLAR ECLIPSE\x03\x02",
+            "annular": "\x02\x0304ANNULAR SOLAR ECLIPSE\x03\x02",
+            "partial": "\x02\x0308PARTIAL SOLAR ECLIPSE\x03\x02"}[ecl["kind"]]
+    return (f"{kind} today — about {ecl['obscuration'] * 100:.0f}% of the sun "
+            f"covered at \x02{_clock(ecl['peak'])}\x03, sun {ecl['altitude']:.0f}° up "
+            "| \x02never look at it without a proper solar filter\x02")
+
+
+def planets_line(samples, lat, lon):
+    """The naked-eye planets that get properly up tonight, brightest
+    first, each with the time it is highest. None when there are none --
+    which happens, for a fortnight or so around the wrong conjunctions."""
+    planets = ephemeris.visible_planets(samples, lat, lon)
+    if not planets:
+        return None
+    bits = [f"\x02{p['name']}\x02 (mag {p['mag']:+.1f}) {p['alt']:.0f}° "
+            f"{ephemeris.compass(p['az'])} at {_clock(p['when'])}"
+            for p in planets]
+    return "Planets: " + " | ".join(bits)
+
+
+def deep_sky_line(when, lat, lon, moon_illum):
+    """Three showpieces that are well up at `when`, with what each one
+    needs. Only called when the seeing and transparency are worth the
+    trip outside."""
+    picks = ephemeris.deep_sky_picks(when, lat, lon, moon_illum)
+    if not picks:
+        return None
+    bits = [f"\x02{o['name']}\x02 (mag {o['mag']:.1f}, {o['alt']:.0f}° "
+            f"{ephemeris.compass(o['az'])}, {o['tool']})" for o in picks]
+    return "Worth a look: " + " | ".join(bits)
+
+
 # === Report ===
 
 def _clock(dt):
@@ -617,8 +852,14 @@ def _clock(dt):
 def build_report(cfg):
     """Tonight's report as a list of IRC-ready lines: sun and moon
     computed locally, forecast parts degrading gracefully when a
-    service is unreachable, and a bins-out reminder on the eve of a
-    collection day."""
+    service is unreachable, tonight's likely-visible ISS passes, and a
+    bins-out reminder on the eve of a collection day.
+
+    Three lines only appear when they have something to say: a lunar
+    eclipse, an aurora worth going outside for, and -- when the seeing
+    and transparency are average or better -- three deep-sky targets
+    that are well placed at the darkest hour. The planets get a line
+    whenever any of them are up."""
     lat, lon = cfg.reference_lat, cfg.reference_lon
     now = datetime.now(timezone.utc)
     today = now.astimezone(UK).date() if UK else now.astimezone().date()
@@ -665,6 +906,44 @@ def build_report(cfg):
         parts.append(f"\x02\x0300SNOW\x03\x02 expected ({weather['snow_cm']:.1f} cm)")
 
     lines = [" | ".join(parts)]
+
+    eclipse = eclipse_line(night_start, night_end, lat, lon)
+    if eclipse:
+        lines.append(eclipse)
+
+    cloud = weather["cloud"] if weather else None
+    _, aurora = aurora_report(lat, lon, night_start, night_end, cloud,
+                              cfg.aurora_min_status)
+    if aurora:
+        lines.append(aurora)
+
+    samples = _night_samples(night_start, night_end, lat, lon)
+    planets = planets_line(samples, lat, lon)
+    if planets:
+        lines.append(planets)
+
+    # Targets only when the atmosphere is going to cooperate: pointing
+    # someone at a 9th-magnitude galaxy through poor transparency is a
+    # waste of a cold hour.
+    if (seeing and seeing["seeing"] <= AVERAGE_OR_BETTER
+            and seeing["transparency"] <= AVERAGE_OR_BETTER):
+        darkest = min(samples, key=lambda pair: pair[1])[0]
+        targets = deep_sky_line(darkest, lat, lon, illum)
+        if targets:
+            lines.append(targets)
+
+    passes = fetch_iss_passes(lat, lon, cfg.iss_min_elevation)
+    if passes is None:
+        lines.append("ISS pass forecast unavailable")
+    elif not passes:
+        lines.append("ISS: no visible passes in the next 24 h")
+    else:
+        times = ", ".join(f"{_clock(p['tca'])} (max {p['max_el']:.0f}°, "
+                          f"from {p['dir']})" for p in passes)
+        n = len(passes)
+        lines.append(f"ISS: \x02{n}\x02 likely visible "
+                     f"pass{'es' if n != 1 else ''} tonight: {times}")
+
     bins = bin_line(cfg.bins_ical_url, today + timedelta(days=1),
                     "Bins out tonight")
     if bins:
@@ -697,10 +976,13 @@ def bin_line(url, day, prefix):
 
 
 def build_morning_report(cfg):
-    """The 6am day briefing as IRC-ready lines: today's calendar, bin
-    collection (kind only — never the address), the day's weather and
-    tonight's likely-visible ISS passes. Each network source degrades
-    to an "unavailable" note on its own."""
+    """The 6am day briefing as IRC-ready lines: today's calendar, a
+    solar eclipse if there is one to see from here today, bin
+    collection (kind only — never the address) and the day's weather.
+    Each network source degrades to an "unavailable" note on its own.
+    ISS passes are reported in the evening astro report (build_report)
+    instead — sunset, ahead of the coming night, is more useful than
+    the next morning."""
     lat, lon = cfg.reference_lat, cfg.reference_lon
     tz = UK or datetime.now().astimezone().tzinfo
     today = datetime.now(tz).date()
@@ -710,6 +992,10 @@ def build_morning_report(cfg):
     if days:
         parts.append("Today: " + "; ".join(days))
     lines = [" | ".join(parts)]
+
+    eclipse = solar_eclipse_line(today, lat, lon)
+    if eclipse:
+        lines.append(eclipse)
 
     bins = bin_line(cfg.bins_ical_url, today, "Bin day")
     if bins:
@@ -729,15 +1015,4 @@ def build_morning_report(cfg):
     else:
         lines.append("Weather forecast unavailable")
 
-    passes = fetch_iss_passes(lat, lon, cfg.iss_min_elevation)
-    if passes is None:
-        lines.append("ISS pass forecast unavailable")
-    elif not passes:
-        lines.append("ISS: no visible passes in the next 24 h")
-    else:
-        times = ", ".join(f"{_clock(p['tca'])} (max {p['max_el']:.0f}°, "
-                          f"from {p['dir']})" for p in passes)
-        n = len(passes)
-        lines.append(f"ISS: \x02{n}\x02 likely visible "
-                     f"pass{'es' if n != 1 else ''} tonight: {times}")
     return lines
