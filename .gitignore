@@ -1,0 +1,4 @@
+__pycache__/
+config.txt
+last_alert_time.json
+*.err

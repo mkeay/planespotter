@@ -46,8 +46,11 @@ LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ INFO Sent to IRC: (?P<msg>.*)$"
 )
 ALERT_RE = re.compile(
-    r"^(?P<kind>[A-Za-z][\w ]*)!(?: \((?P<tag>[^)]*)\))? "
-    r"Aircraft \S+ \((?P<hex>[0-9a-fA-F]{6})\)"
+    # "Alert! (tag) Aircraft ...", "(Zzz) Aircraft ..." (snoozed types), or
+    # "Squawk update: FLIGHT (hex) ..." -- all carry the hex in parens.
+    r"^(?:(?P<kind>[A-Za-z][\w ]*)!|\((?P<zzz>Zzz)\)|(?P<squawkup>Squawk update):)"
+    r"(?: \((?P<tag>[^)]*)\))? "
+    r"(?:Aircraft )?\S+ \((?P<hex>[0-9a-fA-F]{6})\)"
 )
 DIST_RE = re.compile(r"Distance: ([\d.]+) miles (\w+) \((\d+)\xb0\)")
 ETA_RE = re.compile(r"ETA: (\d+) seconds")
@@ -82,8 +85,10 @@ def parse_events(lines):
         am = ALERT_RE.match(msg)
         if not am:
             continue  # train cancellations / other announce-spool lines
+        kind = (am.group("kind") or am.group("zzz")
+                or ("Squawk update" if am.group("squawkup") else "Alert"))
         ev = {
-            "time": ts, "kind": am.group("kind"), "tag": am.group("tag"),
+            "time": ts, "kind": kind, "tag": am.group("tag"),
             "hex": am.group("hex").lower(), "raw": msg,
             "military": "MILITARY" in msg,
         }
